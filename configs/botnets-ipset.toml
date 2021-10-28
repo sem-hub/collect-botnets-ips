@@ -1,0 +1,10 @@
+bind_addr = ":8080"
+tls_cert = "server.crt"
+tls_key = "server.key"
+token = "TOKEN FOR COMMUNICATIONS WITH IPSET SERVER"
+ipset_file = "/etc/ufw/abuseipdb-ipset"
+fail2ban_logs = "/var/log/fail2ban.log*"
+neverips_file = "/etc/ufw/never-ips"
+abuseipdb_key = "GET YOUR OWN ABUSEDBIP KEY from www.abuseipdb.com"
+
+server_addr = [ "ipset-server1:8080", "ipset-server2:8080" ]

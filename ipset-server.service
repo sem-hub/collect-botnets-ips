@@ -1,0 +1,9 @@
+[Unit]
+Description = Starting ipset server
+
+[Service]
+ExecStart = /home/sem/bin/ipset-server -config-path /home/sem/bin/configs/botnets-ipset.toml
+Type=simple
+
+[Install]
+WantedBy = multi-user.target
