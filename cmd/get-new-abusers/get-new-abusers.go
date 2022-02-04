@@ -74,6 +74,9 @@ func main() {
 	newIpset := make(map[string]bool)
 	neverIps := utils.GetNeverIps(config)
 	for key := range res {
+		if neverIps[key] {
+			log.Printf("found never IP: %s\n", key)
+		}
 		if !oldIpset[key] && !neverIps[key] {
 			newIpset[key] = true
 		}

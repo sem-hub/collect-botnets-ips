@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"flag"
 	"fmt"
@@ -8,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -21,26 +21,73 @@ var (
 	config     *configs.Config
 )
 
+func unbanIpCmd(w http.ResponseWriter, r *http.Request, ip string) error {
+	neverIps := utils.GetNeverIps(config)
+	if neverIps[ip] {
+		log.Println("Already in Never file. Process unban anyway.")
+	} else {
+		log.Println("Add " + ip + " in Never file.")
+		err := utils.AppendFile(config.NeverIpsFile, ip)
+		if err != nil {
+			log.Print(err)
+		}
+	}
+
+	ipset := utils.GetOldIpset(config)
+
+	if !ipset[ip] {
+		w.WriteHeader(http.StatusNotAcceptable)
+		return errors.New("Not exists")
+	}
+	delete(ipset, ip)
+
+	var content []string
+	// Get first line (ipset config)
+	f, err := os.Open(config.IpSetFile)
+	if err != nil {
+		return err
+	}
+
+	scanner := bufio.NewScanner(f)
+	if !scanner.Scan() {
+		log.Print("First line read error")
+		return errors.New("Can't read")
+	}
+	content = append(content, scanner.Text())
+	f.Close()
+	log.Print("First line: " + content[0])
+	for k := range ipset {
+		content = append(content, "add dropips "+k)
+	}
+
+	log.Print("Write new " + config.IpSetFile)
+	err = utils.RewriteFile(config.IpSetFile, content)
+	if err != nil {
+		return err
+	}
+
+	out, err := utils.OsExec("/sbin/ipset", "del dropips "+ip)
+	if err != nil {
+		log.Printf("Shell command error: %s. %s", err, out)
+		return err
+	}
+	return nil
+}
+
 func addIpCmd(w http.ResponseWriter, r *http.Request, ip string) error {
 	ipset := utils.GetOldIpset(config)
 
-	if net.ParseIP(ip).To4() == nil {
-		w.WriteHeader(http.StatusExpectationFailed)
-		return errors.New("IP syntax error")
-	}
 	if ipset[ip] {
 		w.WriteHeader(http.StatusNotAcceptable)
 		return errors.New("Already exists")
 	}
-	f, err := os.OpenFile(config.IpSetFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	err := utils.AppendFile(config.IpSetFile, "add dropips "+ip)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		log.Printf("APPEND file error: %s", err)
 		return err
 	}
-	fmt.Fprintln(f, "add dropips "+ip)
-	f.Close()
-	out, err := exec.Command("/sbin/ipset", "add", "dropips", ip).CombinedOutput()
+	out, err := utils.OsExec("/sbin/ipset", "add dropips "+ip)
 	if err != nil {
 		log.Printf("Shell command error: %s. %s", err, out)
 		return err
@@ -72,6 +119,11 @@ func handler(w http.ResponseWriter, r *http.Request) {
 	}
 	cmd := q["cmd"][0]
 	ip := q["ip"][0]
+	if net.ParseIP(ip).To4() == nil {
+		w.WriteHeader(http.StatusExpectationFailed)
+		log.Print("IP syntax error")
+		return
+	}
 	if cmd == "addip" {
 		err := addIpCmd(w, r, ip)
 		if err != nil {
@@ -79,13 +131,21 @@ func handler(w http.ResponseWriter, r *http.Request) {
 			log.Print(err)
 			return
 		}
+		//fmt.Fprintln(w, "Added")
+	} else if cmd == "unbanip" {
+		err := unbanIpCmd(w, r, ip)
+		if err != nil {
+			fmt.Fprintln(w, err)
+			log.Print(err)
+			return
+		}
+		//fmt.Fprintln(w, "Unbanned")
 	} else {
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprintln(w, http.StatusText(http.StatusNotFound))
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintln(w, "Added")
 }
 
 type statusWriter struct {
