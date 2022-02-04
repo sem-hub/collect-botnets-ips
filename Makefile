@@ -1,5 +1,8 @@
-.PHONY: all
+.PHONY: all clean
 all: get-new-abusers ipset-server unban-ip-abuser
+
+clean:
+	rm -f get-new-abusers ipset-server unban-ip-abuser
 
 DEPENDS=internal/app/configs/*.go internal/app/utils/*.go
 
