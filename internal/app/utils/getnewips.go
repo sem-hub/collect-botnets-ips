@@ -90,9 +90,13 @@ func GetBanUnban(config *configs.Config) map[string]bool {
 			if (strings.Contains(line, "Ban") || strings.Contains(line, "Unban")) && !strings.Contains(line, "Increase") && !strings.Contains(line, "Restore") {
 				space := regexp.MustCompile(`\s+`)
 				fields := strings.Split(space.ReplaceAllString(line, " "), " ")
-				ip := fields[7]
-				if net.ParseIP(ip).To4() != nil {
-					res[ip] = true
+				if len(fields) != 8 {
+					log.Printf("Parse error line: %s\n", line)
+				} else {
+					ip := fields[7]
+					if net.ParseIP(ip).To4() != nil {
+						res[ip] = true
+					}
 				}
 			}
 		}

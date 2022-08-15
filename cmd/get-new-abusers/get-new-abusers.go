@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"flag"
 	"log"
 	"os"
@@ -42,7 +41,7 @@ func main() {
 	}
 	defer f.Close()
 	if !debug {
-		log.SetOutput(bufio.NewWriter(f))
+		log.SetOutput(f)
 	}
 
 	res := make(map[string]bool)
