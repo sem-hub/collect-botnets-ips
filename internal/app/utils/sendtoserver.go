@@ -2,7 +2,8 @@ package utils
 
 import (
 	"crypto/tls"
-	"io/ioutil"
+	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -21,7 +22,13 @@ func SendToServer(server string, token string, cmd string, ip string, abusedb bo
 	if abusedb {
 		addStr = "&abusedb"
 	}
-	req, err := http.NewRequest("GET", "https://"+server+"/api?cmd="+cmd+"&ip="+ip+addStr, nil)
+	var req *http.Request
+	var err error
+	if cmd == "add" {
+		req, err = http.NewRequest("POST", "https://"+server+"/api/v1/ips/"+ip+addStr, nil)
+	} else if cmd == "remove" {
+		req, err = http.NewRequest("DELETE", "https://"+server+"/api/v1/ips/"+ip+addStr, nil)
+	}
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -39,11 +46,17 @@ func SendToServer(server string, token string, cmd string, ip string, abusedb bo
 	if resp.StatusCode != 200 {
 		log.Printf("Server: %s: %s Code: %d", server, ip, resp.StatusCode)
 	}
-	_, err = ioutil.ReadAll(resp.Body)
+	jsonText, err := io.ReadAll(resp.Body)
 	if err != nil {
 		log.Printf("Server: %s, Read body error: %s", server, err)
-	} /*else {
-		log.Printf("Server %s: %s", server, text)
-	}*/
+	} else {
+		respStruct := JsonResponse{}
+		err := json.Unmarshal(jsonText, respStruct)
+		if err != nil {
+			log.Printf("Server response is ill: %s", jsonText)
+		} else {
+			log.Printf("Server %s: response status: %s", server, respStruct.Status)
+		}
+	}
 	resp.Body.Close()
 }

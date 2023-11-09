@@ -28,7 +28,7 @@ func unban(file string, addr string) {
 	log.Println("Send to servers")
 	for _, server := range config.ServerAddr {
 		log.Println((server))
-		utils.SendToServer(server, config.Token, "unbanip", addr, false)
+		utils.SendToServer(server, config.Token, "remove", addr, false)
 	}
 }
 

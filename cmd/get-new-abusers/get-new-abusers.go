@@ -94,7 +94,7 @@ func main() {
 		i++
 		log.Printf("%s: add %d: %s\n", time.Now().String(), i, key)
 		for _, server := range config.ServerAddr {
-			utils.SendToServer(server, config.Token, "addip", key, need_abusedb)
+			utils.SendToServer(server, config.Token, "add", key, need_abusedb)
 		}
 	}
 }

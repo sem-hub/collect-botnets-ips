@@ -2,9 +2,9 @@ package main
 
 import (
 	"bufio"
-	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -21,23 +21,53 @@ var (
 	config     *configs.Config
 )
 
-func unbanIpCmd(w http.ResponseWriter, r *http.Request, ip string) error {
+type apiHandler struct{}
+
+func (apiHandler) ServeHTTP(http.ResponseWriter, *http.Request) {}
+
+func sendList(w http.ResponseWriter, r *http.Request) {
+	ipset := utils.GetOldIpset(config)
+
+	resp := utils.JsonResponse{Status: "OK"}
+	for ip, _ := range ipset {
+		resp.Data = append(resp.Data, ip)
+	}
+	fmt.Fprintln(w, utils.SendAsJson(resp))
+}
+
+func findIp(w http.ResponseWriter, r *http.Request, ip string) {
+	ipset := utils.GetOldIpset(config)
+
+	resp := utils.JsonResponse{}
+	if ipset[ip] {
+		resp.Status = "Found"
+		log.Print("Found")
+	} else {
+		resp.Status = "Not Found"
+		log.Print("Not found")
+	}
+
+	fmt.Fprintln(w, utils.SendAsJson(resp))
+}
+
+func deleteIp(w http.ResponseWriter, r *http.Request, ip string) {
 	neverIps := utils.GetNeverIps(config)
 	if neverIps[ip] {
 		log.Println("Already in Never file. Process unban anyway.")
-	} else {
-		log.Println("Add " + ip + " in Never file.")
-		err := utils.AppendFile(config.NeverIpsFile, ip)
-		if err != nil {
-			log.Print(err)
-		}
-	}
+	} //else {
+	//	log.Println("Add " + ip + " in Never file.")
+	//	err := utils.AppendFile(config.NeverIpsFile, ip)
+	//	if err != nil {
+	//		log.Print(err)
+	//	}
+	//}
 
 	ipset := utils.GetOldIpset(config)
 
 	if !ipset[ip] {
-		w.WriteHeader(http.StatusNotAcceptable)
-		return errors.New("Not exists")
+		resp := utils.JsonResponse{Status: "error", ErrMsg: "IP not Found"}
+		fmt.Fprintln(w, utils.SendAsJson(resp))
+		return
 	}
 	delete(ipset, ip)
 
@@ -45,13 +75,18 @@ func unbanIpCmd(w http.ResponseWriter, r *http.Request, ip string) error {
 	// Get first line (ipset config)
 	f, err := os.Open(config.IpSetFile)
 	if err != nil {
-		return err
+		resp := utils.JsonResponse{Status: "error", ErrMsg: "IpSet file open error"}
+		fmt.Fprintln(w, utils.SendAsJson(resp))
+		log.Printf("Can't open IpSet file: %s", err)
+		return
 	}
 
 	scanner := bufio.NewScanner(f)
 	if !scanner.Scan() {
-		log.Print("First line read error")
-		return errors.New("Can't read")
+		resp := utils.JsonResponse{Status: "error", ErrMsg: "IpSet file read error"}
+		fmt.Fprintln(w, utils.SendAsJson(resp))
+		log.Printf("IpSet file read error: %s", err)
+		return
 	}
 	content = append(content, scanner.Text())
 	f.Close()
@@ -63,87 +98,89 @@ func unbanIpCmd(w http.ResponseWriter, r *http.Request, ip string) error {
 	log.Print("Write new " + config.IpSetFile)
 	err = utils.RewriteFile(config.IpSetFile, content)
 	if err != nil {
-		return err
+		resp := utils.JsonResponse{Status: "error", ErrMsg: "IpSet file write error"}
+		fmt.Fprintln(w, utils.SendAsJson(resp))
+		log.Printf("Write error: %s", err)
+		return
 	}
 
 	out, err := utils.OsExec("/sbin/ipset", "del dropips "+ip)
 	if err != nil {
+		resp := utils.JsonResponse{Status: "error", ErrMsg: "IpSet exec error"}
+		fmt.Fprintln(w, utils.SendAsJson(resp))
 		log.Printf("Shell command error: %s. %s", err, out)
-		return err
+		return
 	}
-	return nil
 }
 
-func addIpCmd(w http.ResponseWriter, r *http.Request, ip string) error {
+func addIp(w http.ResponseWriter, r *http.Request, ip string) {
 	ipset := utils.GetOldIpset(config)
 
 	if ipset[ip] {
-		w.WriteHeader(http.StatusNotAcceptable)
-		return errors.New("Already exists")
+		resp := utils.JsonResponse{Status: "error", ErrMsg: "IP already exists"}
+		fmt.Fprintln(w, utils.SendAsJson(resp))
+		return
 	}
 	err := utils.AppendFile(config.IpSetFile, "add dropips "+ip)
 	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
+		resp := utils.JsonResponse{Status: "error", ErrMsg: "Append file error"}
+		fmt.Fprintln(w, utils.SendAsJson(resp))
 		log.Printf("APPEND file error: %s", err)
-		return err
+		return
 	}
 	out, err := utils.OsExec("/sbin/ipset", "add dropips "+ip)
 	if err != nil {
+		resp := utils.JsonResponse{Status: "error", ErrMsg: "IpSet exec error"}
+		fmt.Fprintln(w, utils.SendAsJson(resp))
 		log.Printf("Shell command error: %s. %s", err, out)
-		return err
+		return
 	}
-
-	return nil
 }
 
 func handler(w http.ResponseWriter, r *http.Request) {
 	token := r.Header.Get("Token")
 	if token != config.Token {
+		resp := utils.JsonResponse{Status: "error", ErrMsg: "Not authorized"}
+		fmt.Fprintln(w, utils.SendAsJson(resp))
 		w.WriteHeader(http.StatusUnauthorized)
-		fmt.Fprintln(w, http.StatusText(http.StatusUnauthorized))
+		log.Printf("Unauthorizated acces from: %s. URI: %s", r.RemoteAddr, r.RequestURI)
 		return
 	}
 
-	q := r.URL.Query()
-	if len(q["cmd"]) < 1 {
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintln(w, "CMD is not given")
-		log.Print("CMD is not given")
+	log.Printf("Method: %s", r.Method)
+	log.Printf("URI: %s", r.URL.Path)
+
+	if !strings.HasPrefix(r.URL.String(), "/api/v1/ips/") {
+		resp := utils.JsonResponse{Status: "error", ErrMsg: "API error"}
+		fmt.Fprintln(w, utils.SendAsJson(resp))
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, "API error")
+		log.Print("API error")
 		return
 	}
-	if len(q["ip"]) < 1 {
-		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintln(w, "IP address is not given")
-		log.Print("IP address is not given")
-		return
-	}
-	cmd := q["cmd"][0]
-	ip := q["ip"][0]
-	if net.ParseIP(ip).To4() == nil {
-		w.WriteHeader(http.StatusExpectationFailed)
+
+	ip := strings.TrimPrefix(r.URL.String(), "/api/v1/ips/")
+	log.Printf("IP: %s", ip)
+	if ip != "" && net.ParseIP(ip).To4() == nil {
+		resp := utils.JsonResponse{Status: "error", ErrMsg: "IP syntax error"}
+		fmt.Fprintln(w, utils.SendAsJson(resp))
+		w.WriteHeader(http.StatusOK)
 		log.Print("IP syntax error")
 		return
 	}
-	if cmd == "addip" {
-		err := addIpCmd(w, r, ip)
-		if err != nil {
-			fmt.Fprintln(w, err)
-			log.Print(err)
-			return
+	if r.Method == "GET" {
+		if ip == "" {
+			sendList(w, r)
+		} else {
+			findIp(w, r, ip)
 		}
-		//fmt.Fprintln(w, "Added")
-	} else if cmd == "unbanip" {
-		err := unbanIpCmd(w, r, ip)
-		if err != nil {
-			fmt.Fprintln(w, err)
-			log.Print(err)
-			return
-		}
-		//fmt.Fprintln(w, "Unbanned")
+	} else if r.Method == "POST" {
+		addIp(w, r, ip)
+	} else if r.Method == "DELETE" {
+		deleteIp(w, r, ip)
 	} else {
-		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprintln(w, http.StatusText(http.StatusNotFound))
-		return
+		res := utils.JsonResponse{Status: "error", ErrMsg: "Unknown HTTP method"}
+		fmt.Fprintln(w, utils.SendAsJson(res))
 	}
 	w.WriteHeader(http.StatusOK)
 }
@@ -182,7 +219,9 @@ func main() {
 	}
 	defer f.Close()
 
-	log.SetOutput(f)
+	// log both Stdout and file
+	mw := io.MultiWriter(os.Stdout, f)
+	log.SetOutput(mw)
 
 	config = configs.NewConfig()
 	_, err = toml.DecodeFile(configPath, config)
@@ -191,6 +230,8 @@ func main() {
 	}
 
 	log.Print("Server run")
-	http.HandleFunc("/api", handler)
-	log.Fatal(http.ListenAndServeTLS(":8080", config.TlsCertFile, config.TlsKeyFile, logRequest(http.DefaultServeMux)))
+	mux := http.NewServeMux()
+	mux.Handle("/api/", apiHandler{})
+	mux.HandleFunc("/api/v1/ips/", handler)
+	log.Fatal(http.ListenAndServeTLS(config.BindAddr, config.TlsCertFile, config.TlsKeyFile, logRequest(mux)))
 }
